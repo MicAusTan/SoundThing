@@ -86,6 +86,12 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
 .gbtn:hover{border-color:var(--accent);color:var(--text)}
 .gbtn.lit{border-color:var(--accent);color:var(--glow)}
 .gbtn:disabled{opacity:.3;cursor:not-allowed}
+.adj-row{display:flex;align-items:center;justify-content:center;gap:4px;margin-top:5px}
+.adj-lbl{font-size:.63rem;color:var(--dim);margin-right:2px}
+.adj-btn{background:var(--s2);border:1px solid var(--border);border-radius:5px;color:var(--dim);font-size:.68rem;font-family:'Space Grotesk',sans-serif;font-weight:600;padding:2px 6px;cursor:pointer;transition:border-color .15s,color .15s;line-height:1.4}
+.adj-btn:hover{border-color:var(--accent);color:var(--glow)}
+.adj-btn:disabled{opacity:.25;cursor:not-allowed}
+.adj-num{font-family:'Space Grotesk',sans-serif;font-size:.75rem;font-weight:700;color:var(--text);min-width:26px;text-align:center}
 .arena{flex:1;display:flex;align-items:center;justify-content:center;padding:14px 14px 0;gap:0;min-height:0}
 .scard{flex:1;max-width:560px;display:flex;flex-direction:column;gap:10px;opacity:0;transition:opacity .3s ease,transform .3s ease}
 .scard.ca{transform:translateX(-38px)}
@@ -344,6 +350,14 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
     <div class="gprog">
       <div class="rlabel" id="round-lbl">Loading...</div>
       <div class="ptrack"><div class="pfill" id="pfill" style="width:0%"></div></div>
+      <div class="adj-row">
+        <span class="adj-lbl">Remaining:</span>
+        <button class="adj-btn" onclick="adjustBattles(-10)">-10</button>
+        <button class="adj-btn" onclick="adjustBattles(-1)">-1</button>
+        <span class="adj-num" id="adj-rem">-</span>
+        <button class="adj-btn" onclick="adjustBattles(+1)">+1</button>
+        <button class="adj-btn" onclick="adjustBattles(+10)">+10</button>
+      </div>
     </div>
     <div style="display:flex;gap:6px;align-items:center">
       <button class="gbtn" id="back-btn"><svg width="12" height="12"><use href="#i-home"/></svg></button>
@@ -802,7 +816,7 @@ document.getElementById('fetch-pl-btn').addEventListener('click', async () => {
         const msg = d.error.message || '';
         if (msg.toLowerCase().includes('not found') || msg.includes('playlistId')) {
           note.style.display = 'block';
-          note.innerHTML = '<strong>Playlist not found.</strong> This usually means it is set to Private or Unlisted. The YouTube Data API only works with Public playlists when using an API key. Go to YouTube Studio, open the playlist, and change its visibility to Public.';
+          note.innerHTML = '<strong>Playlist not found.</strong> Private and Unlisted playlists cannot be fetched. Open the playlist in YouTube Studio and set its visibility to Public, then try again.';
         } else { toast('API error: ' + msg); }
         throw new Error(msg);
       }
@@ -923,7 +937,7 @@ function buildPlayer(side, id, autoplay, onPlaying, onError) {
 
   const p = new YT.Player(el, {
     videoId: id,
-    playerVars: { autoplay: autoplay?1:0, mute:1, controls:0, modestbranding:1, rel:0, iv_load_policy:3, start: getStartTime() },
+    playerVars: { autoplay: autoplay?1:0, mute:1, controls:1, modestbranding:1, rel:0, iv_load_policy:3, start: getStartTime() },
     events: {
       onReady(e) {
         e.target.setVolume(DEFAULT_VOL);
@@ -1222,12 +1236,41 @@ function clearBar(side) {
 }
 function clearBars() { clearBar('a'); clearBar('b'); }
 
-function updateProgress() {
-  const pct = G.totalComps > 0 ? ((G.doneComps-1)/G.totalComps)*100 : 0;
-  document.getElementById('pfill').style.width = Math.min(pct,100)+'%';
-  const cap = G.maxBattles > 0 ? Math.min(G.totalComps, G.maxBattles) : G.totalComps;
-  document.getElementById('round-lbl').textContent = `Battle ${G.doneComps} of up to ~${cap}`;
+function effectiveMax() {
+  // The cap we are actually working toward
+  return G.maxBattles > 0 ? Math.min(G.totalComps, G.maxBattles) : G.totalComps;
 }
+
+function updateProgress() {
+  const cap = effectiveMax();
+  const pct = cap > 0 ? ((G.doneComps - 1) / cap) * 100 : 0;
+  document.getElementById('pfill').style.width = Math.min(pct, 100) + '%';
+  document.getElementById('round-lbl').textContent = `Battle ${G.doneComps} of up to ~${cap}`;
+
+  const remaining = Math.max(0, cap - G.doneComps);
+  document.getElementById('adj-rem').textContent = remaining;
+
+  // Disable minus when already at minimum (1 more battle after this)
+  const minCap = G.doneComps + 1;
+  document.querySelectorAll('.adj-btn').forEach(b => {
+    const delta = parseInt(b.textContent);
+    if (delta < 0 && cap + delta < minCap) b.disabled = true;
+    else if (delta > 0 && cap >= G.totalComps) b.disabled = true;
+    else b.disabled = false;
+  });
+}
+
+window.adjustBattles = function(delta) {
+  const cur = effectiveMax();
+  // Minimum: at least one more battle than we've already done
+  const minCap = G.doneComps + 1;
+  const maxCap = G.totalComps;
+  const next = Math.min(maxCap, Math.max(minCap, cur + delta));
+  G.maxBattles = next;
+  updateProgress();
+  const remaining = Math.max(0, next - G.doneComps);
+  toast(`Adjusted to ~${remaining} remaining battle${remaining !== 1 ? 's' : ''}.`);
+};
 
 // ================================================================
 // VOTE BUTTON EVENT LISTENERS  (this was the critical missing bug)
