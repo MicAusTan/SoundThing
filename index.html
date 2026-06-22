@@ -110,8 +110,8 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
 .pshadow{position:absolute;inset:0;z-index:4;background:rgba(5,4,12,.9);display:flex;align-items:center;justify-content:center;transition:opacity .4s ease}
 .pshadow svg{opacity:.25}
 .scard.reveal .pshadow{opacity:0;pointer-events:none}
-.povly{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:3;background:rgba(0,0,0,.35);transition:opacity .22s;pointer-events:none}
-.povly.hidden{opacity:0}
+.povly{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:3;background:rgba(0,0,0,.35);transition:opacity .22s,visibility .22s;pointer-events:none}
+.povly.hidden{opacity:0;visibility:hidden}
 .pcircle{width:54px;height:54px;background:rgba(255,255,255,.12);border-radius:50%;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.17);color:#fff;transition:background .2s,transform .2s;cursor:pointer;pointer-events:auto}
 .pcircle:hover{background:rgba(255,255,255,.22);transform:scale(1.1)}
 /* Refresh button on player */
@@ -949,7 +949,7 @@ function drainQueue() {
 // ================================================================
 // PLAYER MANAGEMENT
 // ================================================================
-function buildPlayer(side, id, autoplay, onPlaying, onError) {
+function buildPlayer(side, id, autoplay, onPlaying, onErrorCb) {
   const wrap = document.getElementById(`pwrap-${side}`);
   wrap.innerHTML = '';
   const el = document.createElement('div');
@@ -959,6 +959,16 @@ function buildPlayer(side, id, autoplay, onPlaying, onError) {
   const errEl = document.getElementById(`perr-${side}`);
   errEl.classList.remove('visible');
   document.getElementById(`refr-${side}`).classList.remove('visible');
+
+  // 35 second hard timeout: if the player never fires PLAYING, treat it as a failure
+  const loadDeadline = setTimeout(() => {
+    if (fired) return;
+    fired = true;
+    errEl.classList.add('visible');
+    document.getElementById(`perrmsg-${side}`).textContent = 'Video took too long to load.';
+    document.getElementById(`refr-${side}`).classList.add('visible');
+    onErrorCb?.();
+  }, 35000);
 
   const p = new YT.Player(el, {
     videoId: id,
@@ -973,17 +983,21 @@ function buildPlayer(side, id, autoplay, onPlaying, onError) {
         WV[side].active = e.data === YT.PlayerState.PLAYING;
         if (e.data === YT.PlayerState.PLAYING && !fired) {
           fired = true;
+          clearTimeout(loadDeadline);
           setTimeout(() => document.getElementById(`thumb-${side}`)?.classList.add('fade'), 350);
           onPlaying?.();
         }
       },
       onError(e) {
+        clearTimeout(loadDeadline);
+        if (fired) return;
+        fired = true;
         WV[side].active = false;
         errEl.classList.add('visible');
         document.getElementById(`refr-${side}`).classList.add('visible');
         const msgs = { 2:'Invalid video ID.', 5:'HTML5 player error.', 100:'Video not found or private.', 101:'Playback not allowed in embeds.', 150:'Playback not allowed in embeds.' };
         document.getElementById(`perrmsg-${side}`).textContent = msgs[e.data] || `Playback error (${e.data}).`;
-        onError?.();
+        onErrorCb?.();
       },
     },
   });
@@ -1060,8 +1074,23 @@ function presentComparison(vidA, vidB) {
 
   const load = () => {
     if (G.compId !== myId) return;
-    G.players.a = buildPlayer('a', vidA.id, true, () => { if (G.compId === myId) startTimerA(myId); }, () => { if (G.compId === myId) { document.getElementById('ovly-a').classList.remove('hidden'); } });
-    G.players.b = buildPlayer('b', vidB.id, false, null, () => { if (G.compId === myId) { document.getElementById('ovly-b').classList.remove('hidden'); } });
+    G.players.a = buildPlayer('a', vidA.id, true,
+      () => { if (G.compId === myId) startTimerA(myId); },
+      () => {
+        // A failed or timed out - show error briefly then advance to B
+        if (G.compId !== myId) return;
+        clearBar('a');
+        setTimeout(() => { if (G.compId === myId) advanceToB(); }, 2500);
+      }
+    );
+    G.players.b = buildPlayer('b', vidB.id, false, null,
+      () => {
+        // B failed or timed out - show error briefly then enable voting
+        if (G.compId !== myId) return;
+        clearBar('b');
+        setTimeout(() => { if (G.compId === myId) enableVoting(); }, 2500);
+      }
+    );
   };
   if (ytReady) load(); else ytPending = load;
 
@@ -1117,12 +1146,13 @@ function revealB() {
       }
     } catch {}
   }, 250);
-  // Fallback: start timer if player doesn't fire PLAYING within 2.5s
+  // Fallback: if PLAYING event never fires (e.g. already at start, some browsers skip it)
+  // wait 5s then start the timer anyway so slow connections don't stall forever
   setTimeout(() => {
     if (G.compId !== myId || bFired) return;
     bFired = true; clearInterval(watch);
     startBar('b', CFG.previewDur * 1000, () => { if (G.compId === myId) advanceToVoting(); });
-  }, 2500);
+  }, 5000);
 }
 
 function advanceToVoting() {
@@ -1177,7 +1207,7 @@ function skipCurrent() {
         }
       } catch {}
     }, 250);
-    setTimeout(() => { if (!bFired && G.compId === myId) { bFired = true; clearInterval(watch); startBar('b', CFG.previewDur*1000, () => { if (G.compId===myId) advanceToVoting(); }); } }, 2500);
+    setTimeout(() => { if (!bFired && G.compId === myId) { bFired = true; clearInterval(watch); startBar('b', CFG.previewDur*1000, () => { if (G.compId===myId) advanceToVoting(); }); } }, 5000);
   } else if (G.phase === 'b_preview') {
     clearBar('b');
     if (cancelFadeB) { cancelFadeB(); cancelFadeB = null; }
